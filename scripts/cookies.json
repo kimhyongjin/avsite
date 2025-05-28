@@ -1,0 +1,30 @@
+[
+  {
+    "name": "_ga",
+    "value": "GA1.1.829569502.1745408379",
+    "domain": ".bestyadong.net",
+    "path": "/",
+    "expires": 1779968379.442221,
+    "size": 29,
+    "httpOnly": false,
+    "secure": false,
+    "session": false,
+    "priority": "Medium",
+    "sameParty": false,
+    "sourceScheme": "Secure"
+  },
+  {
+    "name": "_ga_KVWH36VHXK",
+    "value": "GS1.1.1745408379.1.0.1745408379.0.0.0",
+    "domain": ".bestyadong.net",
+    "path": "/",
+    "expires": 1779968379.441725,
+    "size": 51,
+    "httpOnly": false,
+    "secure": false,
+    "session": false,
+    "priority": "Medium",
+    "sameParty": false,
+    "sourceScheme": "Secure"
+  }
+]

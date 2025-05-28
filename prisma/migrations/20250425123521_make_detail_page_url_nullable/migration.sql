@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Video" ALTER COLUMN "detailPageUrl" DROP NOT NULL,
+ALTER COLUMN "detailPageUrl" DROP DEFAULT;

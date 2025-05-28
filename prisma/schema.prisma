@@ -1,0 +1,19 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Video {
+  id             Int       @id @default(autoincrement())
+  title          String
+  category       String
+  videoUrl       String    @unique
+  thumbnailUrl   String
+  detailPageUrl  String?   @unique    // ← Optional 이면서 중복 방지를 위해 unique 추가
+  isLive         Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+}
