@@ -69,9 +69,9 @@ export default async function CategoryPage({
         <>
           {/* 4열 그리드 */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {videos.map(v => (
-              <VideoCard key={v.id} video={v} />
-            ))}
+          {videos.map((v: { id: number; title: string; thumbnailUrl: string; category: string }) => (
+       <VideoCard key={v.id} video={v} />
+        ))}
           </div>
 
           <nav className="flex justify-center items-center space-x-2 mt-8">
