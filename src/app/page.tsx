@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import VideoCard from '@/components/VideoCard';
 import FooterText from '@/components/Footer';
@@ -21,10 +21,11 @@ interface ApiResponse {
   };
 }
 
-export default function HomePage() {
+// 기존 HomePage 내용을 Inner component로 분리
+function HomePageContent() {
   const router = useRouter();
   const search = useSearchParams();
-  const page       = parseInt(search.get('page')   || '1', 10);
+  const page = parseInt(search.get('page') || '1', 10);
   const searchTerm = search.get('search') ?? '';
 
   const [data, setData] = useState<ApiResponse | null>(null);
@@ -32,8 +33,8 @@ export default function HomePage() {
   useEffect(() => {
     fetch(
       `/api/videos?` +
-      `page=${page}&limit=40` +                                // 한 페이지에 40개
-      (searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : '')
+        `page=${page}&limit=40` +
+        (searchTerm ? `&search=${encodeURIComponent(searchTerm)}` : '')
     )
       .then((res) => res.json())
       .then((json: ApiResponse) => setData(json))
@@ -48,7 +49,6 @@ export default function HomePage() {
 
   return (
     <main className="p-6 max-w-7xl mx-auto">
-
       {/* 4열 그리드 */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {videos.map((v) => (
@@ -92,5 +92,14 @@ export default function HomePage() {
 
       <FooterText />
     </main>
+  );
+}
+
+// Suspense로 감싸는 기본 페이지 컴포넌트
+export default function HomePage() {
+  return (
+    <Suspense fallback={<p className="p-6">로딩 중…</p>}>
+      <HomePageContent />
+    </Suspense>
   );
 }

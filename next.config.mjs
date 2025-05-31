@@ -1,16 +1,17 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {
+export default {
   images: {
-    domains: ['yapl.tv'],
+    domains: ['yapl.tv'],  // 기존 이미지 도메인 유지
   },
+  // 개발 모드에서 cross-origin 요청 허용
   allowedDevOrigins: [
     'http://localhost:3000',
     'http://172.26.248.221:3000',
   ],
 
+  // 브라우저 번들에서 Node 내장 모듈 제거
   webpack(config, { isServer }) {
-    // 서버 번들에는 건드리지 않고,
-    // 클라이언트(브라우저) 번들에만 빈 모듈 처리
+    console.log('🔧 next.config.js webpack override loaded — isServer:', isServer);
     if (!isServer) {
       config.resolve.fallback = {
         ...(config.resolve.fallback ?? {}),
@@ -23,5 +24,3 @@ const nextConfig = {
     return config;
   },
 };
-
-export default nextConfig;

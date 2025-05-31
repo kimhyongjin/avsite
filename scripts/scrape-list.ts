@@ -11,48 +11,25 @@ const BASE = 'https://yapl.tv';
 
 interface Category {
   name: string;
-  path: string;
+  path: string;  // should include the red_video_list base (without page=)
 }
 
 function buildListUrl(cat: Category, pageNum: number) {
-  if (cat.path.includes('red_video_list')) {
-    const sep = cat.path.includes('?') ? '&' : '?';
-    return `${BASE}${cat.path}${sep}page=${pageNum}`;
-  } else {
-    return `${BASE}${cat.path}/${pageNum}`;
-  }
+  // For H/X both, path includes red_video_list… so we use ?page=
+  const sep = cat.path.includes('?') ? '&' : '?';
+  return `${BASE}${cat.path}${sep}page=${pageNum}`;
 }
 
-async function getCategories(browser: Browser): Promise<Category[]> {
-  const page: Page = await browser.newPage();
-  await page.goto(BASE, { waitUntil: 'networkidle2', timeout: 0 });
-  const html = await page.content();
-  await page.close();
-
-  const $ = load(html);
-
-  // H-야동 목록
-  const redCats = $('nav[aria-label="primary"] .locale-div a')
-    .map((_, el) => {
-      const name = $(el).text().trim();
-      const raw = ($(el).attr('href') || '').split('&page=')[0];
-      return { name, path: raw };
-    })
-    .get()
-    .filter(c => c.path.includes('red_video_list'));
-
-  // X-야동만 (쇼츠야동 제외)
-  const xCats = $('.head__menu-line__main-menu__lvl1')
-    .map((_, el) => {
-      const name = $(el).text().trim();
-      const href = $(el).attr('href') || '';
-      const raw = href.startsWith(BASE) ? href.slice(BASE.length) : href;
-      return { name, path: raw.split('&page=')[0] };
-    })
-    .get()
-    .filter(c => c.name === 'X야동');
-
-  return [...redCats, ...xCats];
+async function getCategories(): Promise<Category[]> {
+  // — X-야동 서브카테고리: 수동 정의 (올바른 red_video_list 경로)
+  return [
+    { name: 'X 최신야동', path: '/red_video_list?catGubun=n&catString=최신야동&catUrl=hd/newest' },
+    { name: '한국야동',   path: '/red_video_list?catGubun=m&catString=한국야동&catUrl=categories/korean/hd' },
+    { name: '일본야동',   path: '/red_video_list?catGubun=m&catString=일본야동&catUrl=categories/japanese/hd' },
+    { name: '중국야동',   path: '/red_video_list?catGubun=m&catString=중국야동&catUrl=categories/chinese/hd' },
+    { name: '서양야동',   path: '/red_video_list?catGubun=m&catString=미국야동&catUrl=categories/american/hd' },
+    { name: '애니야동',   path: '/red_video_list?catGubun=m&catString=애니야동&catUrl=categories/anime/hd' },
+  ];
 }
 
 async function scrapeCategory(
@@ -67,24 +44,20 @@ async function scrapeCategory(
   {
     const firstUrl = buildListUrl(cat, 1);
     const p = await browser.newPage();
-    await p.goto(firstUrl, { waitUntil: 'networkidle2', timeout: 0 });
+    await p.goto(encodeURI(firstUrl), { waitUntil: 'networkidle2', timeout: 0 });
     const html = await p.content();
     await p.close();
 
     const $firstPage = load(html);
-    if (cat.path.includes('red_video_list')) {
-      const pageNums = $firstPage('a[href*="red_video_list"][href*="page="]')
-        .map((_, el) => {
-          const href = $firstPage(el).attr('href') || '';
-          const m = href.match(/[?&]page=(\d+)/);
-          return m ? parseInt(m[1], 10) : null;
-        })
-        .get()
-        .filter((n): n is number => n !== null);
-      maxPage = pageNums.length ? Math.max(...pageNums) : 1;
-    } else {
-      maxPage = Infinity;
-    }
+    const pageNums = $firstPage('a[href*="page="]')
+      .map((_, el) => {
+        const href = $firstPage(el).attr('href') || '';
+        const m = href.match(/[?&]page=(\d+)/);
+        return m ? parseInt(m[1], 10) : null;
+      })
+      .get()
+      .filter((n): n is number => n !== null);
+    maxPage = pageNums.length ? Math.max(...pageNums) : 1;
     console.log(`    ℹ️ 총 페이지(${cat.name}): ${maxPage}`);
   }
 
@@ -107,7 +80,7 @@ async function scrapeCategory(
     try {
       const listPage = await browser.newPage();
       await Promise.race([
-        listPage.goto(listUrl, { waitUntil: 'networkidle2', timeout: 0 }),
+        listPage.goto(encodeURI(listUrl), { waitUntil: 'networkidle2', timeout: 0 }),
         new Promise<never>((_, rej) =>
           setTimeout(() => rej(new Error('페이지 로드 타임아웃')), 5000)
         ),
@@ -118,9 +91,9 @@ async function scrapeCategory(
     } catch (err: any) {
       console.warn(`⚠️ P${pageNum} 처리 실패:`, err.message);
       emptyStreak++;
-      if (emptyStreak >= 3) {
-        console.warn(`   ⚠️ 3회 연속 실패, 계속 진행: ${cat.name}`);
-        emptyStreak = 0;
+      if (emptyStreak >= 5) {
+        console.warn(`   ⚠️ 5회 연속 실패, 카테고리 순회 종료: ${cat.name}`);
+        break;
       }
       continue;
     }
@@ -144,59 +117,81 @@ async function scrapeCategory(
           videoCategory:
             new URL(a.attr('href') || '', BASE).searchParams.get('vString') ||
             cat.name,
-          listVideoUrl: c.attr('data-video') || null,
         };
       })
       .get();
 
     if (!items.length) {
       console.warn(`   ⚠️ 아이템 없음 P${pageNum}`);
+      emptyStreak++;
+      if (emptyStreak >= 5) {
+        console.warn(`   ⚠️ 5회 연속 빈 페이지, 카테고리 순회 종료: ${cat.name}`);
+        break;
+      }
       continue;
     }
+    emptyStreak = 0;
 
     // ── 각 아이템 순회 ──
     for (const { title, detail, thumb, videoCategory } of items) {
       let videoUrl: string | null = null;
       try {
-        await detailPage.goto(detail, { waitUntil: 'domcontentloaded', timeout: 0 });
+        await detailPage.goto(encodeURI(detail), { waitUntil: 'domcontentloaded', timeout: 0 });
         await detailPage.waitForSelector('video', { timeout: 5000 });
         videoUrl = await detailPage.evaluate(() => {
           const v = document.querySelector<HTMLVideoElement>('video');
           return v?.currentSrc || v?.src || null;
         });
-        // blob: 처리
         if (videoUrl?.startsWith('blob:')) {
           const real = await detailPage.evaluate(() => {
             const v = document.querySelector<HTMLVideoElement>('video');
-            return (
-              v?.querySelector<HTMLSourceElement>('source')?.src ||
-              null
-            );
+            return v?.querySelector<HTMLSourceElement>('source')?.src || null;
           });
           if (real) videoUrl = real;
         }
       } catch {
         console.warn(`❌ Puppeteer 실패: ${title}`);
       }
-
       if (!videoUrl) {
         console.warn(`❌ MP4 못 찾음: ${title}`);
         continue;
       }
 
-      // ── 재생 불가(403,404,500) 필터링 ──
+      // ── 재생 필터링 ──
       try {
         const h = await axios.head(videoUrl, {
           headers: { Referer: detail },
           timeout: 5000,
           validateStatus: () => true,
         });
-        if ([403, 404, 500].includes(h.status)) {
-          console.warn(`⚠️ 재생 불가 (status=${h.status}): ${videoUrl} (${title})`);
+        const status = h.status;
+        const ctype = (h.headers['content-type'] || '').toLowerCase();
+
+        // 1) 허용되지 않은 상태코드 스킵
+        if (![200, 206].includes(status)) {
+          console.warn(`⚠️ 불허용 상태코드 (status=${status}): ${videoUrl} (${title})`);
           continue;
         }
-      } catch {
-        console.warn(`⚠️ HEAD 오류: ${videoUrl} (${title})`);
+        // 2) video/* 또는 HLS(m3u8)도 허용
+        if (!(ctype.startsWith('video/') || ctype.includes('mpegurl'))) {
+          console.warn(`⚠️ 비지원 타입 (${ctype}): ${videoUrl} (${title})`);
+          continue;
+        }
+        // 3) Partial Content(206) 응답 시 스트림 확인
+        if (status === 206) {
+          const r = await axios.get(videoUrl, {
+            headers: { Range: 'bytes=0-1', Referer: detail },
+            responseType: 'stream',
+            timeout: 5000,
+            validateStatus: () => true,
+          });
+          if (r.status !== 206) {
+            console.warn(`⚠️ GET 테스트 실패 (status=${r.status}): ${videoUrl} (${title})`);
+            continue;
+          }
+        }
+      } catch (err: any) {
+        console.warn(`⚠️ 재생 확인 오류: ${videoUrl} (${title})`, err.message);
         continue;
       }
 
@@ -204,10 +199,7 @@ async function scrapeCategory(
       const ex = await prisma.video.findFirst({ where: { detailPageUrl: detail } });
       if (ex) {
         try {
-          await prisma.video.update({
-            where: { id: ex.id },
-            data: { videoUrl },
-          });
+          await prisma.video.update({ where: { id: ex.id }, data: { videoUrl } });
           console.log(`🔄 업데이트: ${title}`);
         } catch (e: any) {
           if (e.code !== 'P2002') throw e;
@@ -215,13 +207,7 @@ async function scrapeCategory(
       } else {
         try {
           await prisma.video.create({
-            data: {
-              title,
-              detailPageUrl: detail,
-              videoUrl,
-              thumbnailUrl: thumb,
-              category: videoCategory,
-            },
+            data: { title, detailPageUrl: detail, videoUrl, thumbnailUrl: thumb, category: videoCategory },
           });
           console.log(`✅ 등록: ${title}`);
         } catch (e: any) {
@@ -240,36 +226,11 @@ async function scrapeCategory(
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
-  // 재개용 환경변수
-  const START_CAT = process.env.START_CAT || '';
-  const START_PAGE = parseInt(process.env.START_PAGE || '1', 10);
-  let skipping = START_CAT !== '';
-
   try {
-    const cats = await getCategories(browser);
-    const redCats = cats.filter(
-      c => c.path.includes('red_video_list') && c.name !== 'H 최신야동'
-    );
-    const idx = redCats.findIndex(c => c.name === '한국야동');
-    if (idx > -1) {
-      const [korean] = redCats.splice(idx, 1);
-      redCats.push(korean);
-    }
-
-    console.log('▶️ 전체 H-야동 카테고리 순회:', redCats.map(c => c.name));
-
-    for (const cat of redCats) {
-      let pageToStart = 1;
-      if (skipping) {
-        if (cat.name === START_CAT) {
-          pageToStart = START_PAGE;
-          skipping = false;
-        } else {
-          console.log(`🔹 스킵: ${cat.name}`);
-          continue;
-        }
-      }
-      await scrapeCategory(browser, cat, pageToStart);
+    const cats = await getCategories();
+    console.log('▶️ 전체 X-야동 카테고리 순회:', cats.map(c => c.name));
+    for (const cat of cats) {
+      await scrapeCategory(browser, cat);
     }
   } catch (err) {
     console.error('스크립트 오류:', err);
