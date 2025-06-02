@@ -1,0 +1,17 @@
+{
+    "apps": [
+      {
+        "name": "avsite",             
+        "script": "npm",                   
+        "args": "start -p 3000",          
+        "cwd": "./",                    
+        "watch": false,                     
+        "autorestart": true,                 
+        "max_restarts": 5,                   
+        "restart_delay": 10000,              
+        "env": {
+          "NODE_ENV": "production"
+        }
+      }
+    ]
+  }
