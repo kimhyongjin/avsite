@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import VideoCard from '@/components/VideoCard';
 import SkeletonGrid from '@/components/SkeletonGrid';
 import { use } from 'react';
