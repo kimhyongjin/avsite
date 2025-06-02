@@ -16,6 +16,7 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
+
     // ↙―――― 여기서부터 alias 설정
     "baseUrl": ".",
     "paths": {
@@ -33,6 +34,7 @@
       ]
     }
     // ――――↘
+
     ,
     "incremental": true,
     "esModuleInterop": true,
@@ -42,16 +44,24 @@
       }
     ]
   },
+
   "include": [
+    // 프로젝트 내 모든 TS/TSX 파일을 포함
     "**/*.ts",
     "**/*.tsx",
     "next-env.d.ts",
     "scripts/**/*",
     ".next/types/**/*.ts"
   ],
+
   "exclude": [
+    // 원래 기본 제외
     "node_modules",
     ".next",
-    "dist"
+    "dist",
+
+    // ↓ 이 폴더 내부의 모든 TS/TSX 파일을 제외
+    "src/app/api/refresh.disabled/**/*",
+    "src/app/api/backup-refresh/**/*"
   ]
 }
