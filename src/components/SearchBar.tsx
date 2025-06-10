@@ -20,10 +20,7 @@ export default function SearchBar() {
         value={q}
         onChange={e => setQ(e.currentTarget.value)}
         placeholder="검색어를 입력하세요"
-        className="
-          w-full rounded-l border border-gray-300
-          bg-white px-3 py-2 focus:outline-none focus:ring focus:border-blue-500
-        "
+        className="w-full px-3 py-2 border rounded-l border-gray-300 bg-white placeholder-gray-400 focus:outline-none focus:ring focus:border-blue-500"
       />
       <button
         type="submit"
