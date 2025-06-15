@@ -65,7 +65,7 @@ export default async function VideoPage({ params }: Props) {
       {/* ↓ 추천 영상 섹션 시작 ↓ */}
       <h2 className="text-2xl font-semibold mt-12 mb-4">추천 영상</h2>
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-6">
-        {recommendedVideos.map((rec) => (
+      {recommendedVideos.map((rec: any) => (
           <VideoCard key={rec.id} video={rec} />
         ))}
       </div>

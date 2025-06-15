@@ -1,3 +1,4 @@
+import '@/lib/globalError';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import axios from 'axios';
@@ -6,6 +7,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export const runtime = 'nodejs';
 
+// AWS S3 client
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -18,6 +20,30 @@ const s3 = new S3Client({
 const videoCache = new Map<number, { url: string; expires: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5분
 
+// 동시 in-flight 요청 중복 제거용
+const inFlight = new Map<string, Promise<Response>>();
+
+// fetch에 재시도 + abort 지원
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit & { signal?: AbortSignal } = {},
+  retries = 2
+): Promise<Response> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err: any) {
+      lastError = err;
+      // 클라이언트가 중단한 경우 바로 던지기
+      if (err.name === 'AbortError') throw err;
+      console.error(`Fetch attempt ${attempt} failed for ${url}:`, err);
+      await new Promise((r) => setTimeout(r, 500 * attempt));
+    }
+  }
+  throw lastError;
+}
+
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> }
@@ -25,8 +51,8 @@ export async function GET(
   const { id } = await ctx.params;
   const vid = Number(id);
   console.log(`🔸 Stream request for video ID: ${vid}`);
+
   if (isNaN(vid)) {
-    console.error('Invalid video ID:', id);
     return NextResponse.json({ error: 'Invalid ID' }, { status: 400 });
   }
 
@@ -36,7 +62,6 @@ export async function GET(
     select: { videoUrl: true, detailPageUrl: true },
   });
   if (!rec) {
-    console.error('Video not found in DB:', vid);
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
@@ -44,7 +69,7 @@ export async function GET(
   const detailPageUrl = rec.detailPageUrl!;
   console.log('• Original URL from DB:', videoUrl);
 
-  // 2) xhcdn의 단기 만료 URL 처리 (캐시 & detail-page fallback)
+  // 2) xhcdn 단기 만료 URL 처리 (캐시 + fallback)
   const now = Date.now();
   const cached = videoCache.get(vid);
   if (cached && cached.expires > now) {
@@ -63,14 +88,26 @@ export async function GET(
           [];
         if (!picks.length) {
           console.error('MP4 URL not found in fallback HTML');
-          return NextResponse.json({ error: 'MP4 URL not found' }, { status: 404 });
+          return NextResponse.json(
+            { error: 'MP4 URL not found' },
+            { status: 404 }
+          );
         }
         videoUrl = picks[0];
         console.log('• Fallback URL from detail page:', videoUrl);
         videoCache.set(vid, { url: videoUrl, expires: now + CACHE_TTL });
-      } catch (e) {
-        console.error('Error fetching detail page for xhcdn fallback:', e);
-        return NextResponse.json({ error: 'Detail fetch failed' }, { status: 502 });
+      } catch (e: any) {
+        if (axios.isAxiosError(e) && e.response?.status === 500) {
+          console.warn(
+            '⚠️ xhcdn detail page returned 500; skipping fallback, using original URL'
+          );
+        } else {
+          console.error('Error fetching detail page for xhcdn fallback:', e);
+          return NextResponse.json(
+            { error: 'Detail fetch failed' },
+            { status: 502 }
+          );
+        }
       }
     }
   }
@@ -84,33 +121,59 @@ export async function GET(
     ...(range ? { Range: range } : {}),
   };
 
-  // 4) fetch upstream
+  // 4) fetch upstream (+ in-flight dedupe + retry + abort)
+  const cacheKey = `${videoUrl}|${range ?? ''}`;
   let upstream: Response;
-  const host = new URL(videoUrl).host.toLowerCase();
-  if (host.endsWith('xhcdn.com')) {
-    console.log('→ Fetching from xhcdn with headers:', upstreamHeaders);
-    upstream = await fetch(videoUrl, { headers: upstreamHeaders });
-  } else if (host.includes('s3.amazonaws.com') || host.includes('.s3.')) {
-    // AWS S3 signed URL logic
-    const urlObj = new URL(videoUrl);
-    const bucket = urlObj.host.split('.')[0];
-    const rawKey = urlObj.pathname.slice(1);
-    const [encFolder, encFile] = rawKey.split('/', 2);
-    const key = `${decodeURIComponent(encFolder)}/${encFile}`;
-    const cmd = new GetObjectCommand({ Bucket: bucket, Key: key, Range: range });
-    const signedUrl = await getSignedUrl(s3, cmd, { expiresIn: 3600 });
-    console.log('→ Fetching from S3 signed URL');
-    upstream = await fetch(signedUrl, {
-      headers: range ? { Range: range } : {},
-    });
+  if (inFlight.has(cacheKey)) {
+    upstream = await inFlight.get(cacheKey)!;
   } else {
-    console.log('→ Fetching from other host with headers:', upstreamHeaders);
-    upstream = await fetch(videoUrl, { headers: upstreamHeaders });
+    const p = (async () => {
+      try {
+        const host = new URL(videoUrl).host.toLowerCase();
+        if (host.endsWith('xhcdn.com')) {
+          console.log('→ Fetching from xhcdn with headers:', upstreamHeaders);
+          return await fetchWithRetry(videoUrl, {
+            headers: upstreamHeaders,
+            signal: req.signal,
+          });
+        } else if (
+          host.includes('s3.amazonaws.com') ||
+          host.includes('.s3.')
+        ) {
+          // S3 signed URL
+          const urlObj = new URL(videoUrl);
+          const bucket = urlObj.host.split('.')[0];
+          const rawKey = urlObj.pathname.slice(1);
+          const [encFolder, encFile] = rawKey.split('/', 2);
+          const key = `${decodeURIComponent(encFolder)}/${encFile}`;
+          const cmd = new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Range: range,
+          });
+          const signedUrl = await getSignedUrl(s3, cmd, { expiresIn: 3600 });
+          console.log('→ Fetching from S3 signed URL');
+          return await fetchWithRetry(signedUrl, {
+            headers: range ? { Range: range } : {},
+            signal: req.signal,
+          });
+        } else {
+          console.log('→ Fetching from other host with headers:', upstreamHeaders);
+          return await fetchWithRetry(videoUrl, {
+            headers: upstreamHeaders,
+            signal: req.signal,
+          });
+        }
+      } finally {
+        inFlight.delete(cacheKey);
+      }
+    })();
+    inFlight.set(cacheKey, p);
+    upstream = await p;
   }
 
-  // 5) upstream 에러 체크
+  // 5) upstream 상태 체크
   if (!upstream.ok) {
-    console.error(`Upstream error ${upstream.status} for ${videoUrl}`);
     return NextResponse.json(
       { error: `Upstream error: ${upstream.status}` },
       { status: upstream.status }
@@ -119,20 +182,22 @@ export async function GET(
   console.log(`✨ Upstream responded OK (${upstream.status})`);
 
   // 6) 스트림 응답
-  const resHeaders = new Headers();
-  resHeaders.set('Content-Type', 'video/mp4');
-  resHeaders.set('Accept-Ranges', 'bytes');
-  resHeaders.set('Access-Control-Allow-Origin', '*');
-
+  const headers = new Headers({
+    'Content-Type': 'video/mp4',
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
+  });
   const contentRange = upstream.headers.get('content-range');
   const contentLength = upstream.headers.get('content-length');
   if (contentRange) {
-    resHeaders.set('Content-Range', contentRange);
-    if (contentLength) resHeaders.set('Content-Length', contentLength);
-    return new NextResponse(upstream.body, { status: 206, headers: resHeaders });
+    headers.set('Content-Range', contentRange);
+    if (contentLength) headers.set('Content-Length', contentLength);
+  } else if (contentLength) {
+    headers.set('Content-Length', contentLength);
   }
-  if (contentLength) {
-    resHeaders.set('Content-Length', contentLength);
-  }
-  return new NextResponse(upstream.body, { status: contentRange ? 206 : 200, headers: resHeaders });
+
+  return new NextResponse(upstream.body, {
+    status: contentRange ? 206 : 200,
+    headers,
+  });
 }
